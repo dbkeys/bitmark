@@ -13,11 +13,12 @@
 #include "checkqueue.h"
 #include "init.h"
 #include "net.h"
+#include "pow.h"
 #include "txdb.h"
 #include "txmempool.h"
 #include "ui_interface.h"
 #include "util.h"
-#include "pow.h"
+#include "utilmoneystr.h"
 
 #include <sstream>
 #include <inttypes.h>
@@ -26,8 +27,8 @@
 #include <boost/filesystem.hpp>
 #include <boost/filesystem/fstream.hpp>
 
-using namespace std;
 using namespace boost;
+using namespace std;
 
 #if defined(NDEBUG)
 # error "Bitmark cannot be compiled without assertions."
@@ -36,11 +37,11 @@ using namespace boost;
 //
 // Global state
 //
-
+CCriticalSection cs_main;
 CTxMemPool mempool;
 
 map<uint256, CBlockIndex*> mapBlockIndex;
-CChain chainMostWork;
+CChain chainActive;
 CCoinsViewCache *pcoinsTip = NULL;
 CBlockIndex *pindexBestHeader = NULL;
 int64_t nTimeBestReceived = 0;
@@ -2621,69 +2622,10 @@ bool static ConnectTip(CValidationState &state, CBlockIndex *pindexNew) {
     return true;
 }
 
-// Make chainMostWork correspond to the chain with the most work in it, that isn't
-// known to be invalid (it's however far from certain to be valid).
-// void static FindMostWorkChain() {
-//     CBlockIndex *pindexNew = NULL;
-//     // In case the current best is invalid, do not consider it.
-//     while (chainMostWork.Tip() && (chainMostWork.Tip()->nStatus & BLOCK_FAILED_MASK)) {
-//         setBlockIndexValid.erase(chainMostWork.Tip());
-//         chainMostWork.SetTip(chainMostWork.Tip()->pprev);
-//     }
-
-//     do {
-//         // Find the best candidate header.
-//         {
-//             std::set<CBlockIndex*, CBlockIndexWorkComparator>::reverse_iterator it = setBlockIndexValid.rbegin();
-//             if (it == setBlockIndexValid.rend()) {
-// 	      return;
-// 	    }
-//             pindexNew = *it;
-//         }
-
-//         // Check whether all blocks on the path between the currently active chain and the candidate are valid.
-//         // Just going until the active chain is an optimization, as we know all blocks in it are valid already.
-//         CBlockIndex *pindexTest = pindexNew;
-//         bool fInvalidAncestor = false;
-//         while (pindexTest && !chainActive.Contains(pindexTest)) {
-//             assert(pindexTest->nStatus & BLOCK_HAVE_DATA);
-//             assert(pindexTest->nChainTx || pindexTest->nHeight == 0);
-//             if (pindexTest->nStatus & BLOCK_FAILED_MASK) {
-//                 // Candidate has an invalid ancestor, remove entire chain from the set.
-//                 if (pindexBestInvalid == NULL || pindexNew->nChainWork > pindexBestInvalid->nChainWork)
-//                     pindexBestInvalid = pindexNew;
-//                 CBlockIndex *pindexFailed = pindexNew;
-//                 while (pindexTest != pindexFailed) {
-//                     pindexFailed->nStatus |= BLOCK_FAILED_CHILD;
-//                     // setBlockIndexValid.erase(pindexFailed);
-//                     setBlockIndexCandidates.erase(pindexFailed);
-//                     pindexFailed = pindexFailed->pprev;
-//                 }
-//                 setBlockIndexCandidates.erase(pindexTest);
-//                 fInvalidAncestor = true;
-//                 break;
-//             }
-//             pindexTest = pindexTest->pprev;
-//         }
-//         if (fInvalidAncestor)
-//             continue;
-
-//         break;
-//     } while(true);
-
-//     // Check whether it's actually an improvement.
-//     if (chainMostWork.Tip() && !CBlockIndexWorkComparator()(chainMostWork.Tip(), pindexNew)) {
-//         return;
-//     }
-//     // We have a new best.
-//     chainMostWork.SetTip(pindexNew);
-// }
-
-
 static CBlockIndex* FindMostWorkChain() {
-    while (chainMostWork.Tip() && (chainMostWork.Tip()->nStatus & BLOCK_FAILED_MASK)) {
-        setBlockIndexValid.erase(chainMostWork.Tip());
-        chainMostWork.SetTip(chainMostWork.Tip()->pprev);
+    while (chainActive.Tip() && (chainActive.Tip()->nStatus & BLOCK_FAILED_MASK)) {
+        setBlockIndexValid.erase(chainActive.Tip());
+        chainActive.SetTip(chainActive.Tip()->pprev);
     }
     do {
         CBlockIndex *pindexNew = NULL;
@@ -2723,11 +2665,11 @@ static CBlockIndex* FindMostWorkChain() {
             return pindexNew;
     } while(true);
 
-    if (chainMostWork.Tip() && !CBlockIndexWorkComparator()(chainMostWork.Tip(), pindexNew)) {
+    if (chainActive.Tip() && !CBlockIndexWorkComparator()(chainActive.Tip(), pindexNew)) {
         return;
     }
     // We have a new best.
-    chainMostWork.SetTip(pindexNew);
+    chainActive.SetTip(pindexNew);
 }
 
 static bool ActivateBestChainStep(CValidationState &state, CBlockIndex *pindexMostWork, CBlock *pblock) {
@@ -2804,55 +2746,6 @@ static bool ActivateBestChainStep(CValidationState &state, CBlockIndex *pindexMo
 
     return true;
 }
-
-// Try to activate to the most-work chain (thereby connecting it).
-// bool ActivateBestChain(CValidationState &state) {
-//     LOCK(cs_main);
-//     CBlockIndex *pindexOldTip = chainActive.Tip();
-//     bool fComplete = false;
-//     while (!fComplete) {
-//         FindMostWorkChain();
-//         fComplete = true;
-
-//         // Check whether we have something to do.
-//         if (chainMostWork.Tip() == NULL) break;
-
-//         // Disconnect active blocks which are no longer in the best chain.
-//         while (chainActive.Tip() && !chainMostWork.Contains(chainActive.Tip())) {
-// 	  if (!DisconnectTip(state))
-// 	    return false;
-//         }
-
-//         // Connect new blocks.
-//         while (!chainActive.Contains(chainMostWork.Tip())) {
-//             CBlockIndex *pindexConnect = chainMostWork[chainActive.Height() + 1];
-//             if (!ConnectTip(state, pindexConnect)) {
-//                 if (state.IsInvalid()) {
-//                     // The block violates a consensus rule.
-//                     if (!state.CorruptionPossible())
-//                         InvalidChainFound(chainMostWork.Tip());
-//                     fComplete = false;
-//                     state = CValidationState();
-//                     break;
-//                 } else {
-//                     // A system error occurred (disk space, database error, ...).
-//                     return false;
-//                 }
-//             }
-//         }
-//     }
-
-//     if (chainActive.Tip() != pindexOldTip) {
-//         std::string strCmd = GetArg("-blocknotify", "");
-//         if (!IsInitialBlockDownload() && !strCmd.empty())
-//         {
-//             boost::replace_all(strCmd, "%s", chainActive.Tip()->GetBlockHash().GetHex());
-//             boost::thread t(runCommand, strCmd); // thread runs free
-//         }
-//     }
-
-//     return true;
-// }
 
 bool ActivateBestChain(CValidationState &state, CBlock *pblock) {
     CBlockIndex *pindexNewTip = NULL;
@@ -3004,8 +2897,8 @@ bool ReceivedBlockTransactions(const CBlock &block, CValidationState& state, CBl
     pindexNew->nStatus |= BLOCK_HAVE_DATA;
     pindexNew->RaiseValidity(BLOCK_VALID_TRANSACTIONS);
     {
-         LOCK(cs_nBlockSequenceId);
-         pindexNew->nSequenceId = nBlockSequenceId++;
+        LOCK(cs_nBlockSequenceId);
+        pindexNew->nSequenceId = nBlockSequenceId++;
     }
 
     if (pindexNew->pprev == NULL || pindexNew->pprev->nChainTx) {
@@ -3131,6 +3024,21 @@ bool FindUndoPos(CValidationState &state, int nFile, CDiskBlockPos &pos, unsigne
         else
             return state.Error("out of disk space");
     }
+
+    return true;
+}
+
+bool CheckBlockHeader(const CBlockHeader& block, CValidationState& state, bool fCheckPOW)
+{
+    // Check proof of work matches claimed amount
+    if (fCheckPOW && !CheckProofOfWork(block.GetHash(), block.nBits))
+        return state.DoS(50, error("CheckBlockHeader() : proof of work failed"),
+                         REJECT_INVALID, "high-hash");
+
+    // Check timestamp
+    if (block.GetBlockTime() > GetAdjustedTime() + 2 * 60 * 60)
+        return state.Invalid(error("CheckBlockHeader() : block timestamp too far in the future"),
+                             REJECT_INVALID, "time-too-new");
 
     return true;
 }
@@ -3263,7 +3171,74 @@ bool CheckBlock(const CBlock& block, CValidationState& state, bool fCheckPOW, bo
     return true;
 }
 
-bool AcceptBlock(CBlock& block, CValidationState& state, CDiskBlockPos* dbp)
+bool AcceptBlockHeader(const CBlockHeader& block, CValidationState& state, CBlockIndex** ppindex)
+{
+    AssertLockHeld(cs_main);
+    // Check for duplicate
+    uint256 hash = block.GetHash();
+    BlockMap::iterator miSelf = mapBlockIndex.find(hash);
+    CBlockIndex *pindex = NULL;
+    if (miSelf != mapBlockIndex.end()) {
+        // Block header is already known.
+        pindex = miSelf->second;
+        if (ppindex)
+            *ppindex = pindex;
+        if (pindex->nStatus & BLOCK_FAILED_MASK)
+            return state.Invalid(error("%s : block is marked invalid", __func__), 0, "duplicate");
+        return true;
+    }
+
+    // Get prev block index
+    CBlockIndex* pindexPrev = NULL;
+    int nHeight = 0;
+    if (hash != Params().HashGenesisBlock()) {
+        BlockMap::iterator mi = mapBlockIndex.find(block.hashPrevBlock);
+        if (mi == mapBlockIndex.end())
+            return state.DoS(10, error("%s : prev block not found", __func__), 0, "bad-prevblk");
+        pindexPrev = (*mi).second;
+        nHeight = pindexPrev->nHeight+1;
+
+        // Check proof of work
+        if ((!Params().SkipProofOfWorkCheck()) &&
+           (block.nBits != GetNextWorkRequired(pindexPrev, &block)))
+            return state.DoS(100, error("%s : incorrect proof of work", __func__),
+                             REJECT_INVALID, "bad-diffbits");
+
+        // Check timestamp against prev
+        if (block.GetBlockTime() <= pindexPrev->GetMedianTimePast())
+            return state.Invalid(error("%s : block's timestamp is too early", __func__),
+                                 REJECT_INVALID, "time-too-old");
+
+        // Check that the block chain matches the known block chain up to a checkpoint
+        if (!Checkpoints::CheckBlock(nHeight, hash))
+            return state.DoS(100, error("%s : rejected by checkpoint lock-in at %d", __func__, nHeight),
+                             REJECT_CHECKPOINT, "checkpoint mismatch");
+
+        // Don't accept any forks from the main chain prior to last checkpoint
+        CBlockIndex* pcheckpoint = Checkpoints::GetLastCheckpoint();
+        if (pcheckpoint && nHeight < pcheckpoint->nHeight)
+            return state.DoS(100, error("%s : forked chain older than last checkpoint (height %d)", __func__, nHeight));
+
+        // Reject block.nVersion=1 blocks when 95% (75% on testnet) of the network has upgraded:
+        if (block.nVersion < 2 && 
+            CBlockIndex::IsSuperMajority(2, pindexPrev, Params().RejectBlockOutdatedMajority()))
+        {
+            return state.Invalid(error("%s : rejected nVersion=1 block", __func__),
+                                 REJECT_OBSOLETE, "bad-version");
+        }
+    }
+
+    if (pindex == NULL)
+        pindex = AddToBlockIndex(block);
+
+    if (ppindex)
+        *ppindex = pindex;
+
+    return true;
+}
+
+bool AcceptBlock(CBlock& block, CValidationState& state, CBlockIndex** ppindex, CDiskBlockPos* dbp)
+// bool AcceptBlock(CBlock& block, CValidationState& state, CDiskBlockPos* dbp)
 {
     AssertLockHeld(cs_main);
     // Check for duplicate
