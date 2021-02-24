@@ -30,7 +30,8 @@ extern const std::string CLIENT_DATE;
 //
 
 // Bump up to 70003 to easily discriminate earlier versions via DNS Seeder
-static const int PROTOCOL_VERSION = 70003;
+// Bump up to 70004 IBD headers-first / blocks-in-parallel
+static const int PROTOCOL_VERSION = 70004;
 
 // intial proto version, to be increased after version/verack negotiation
 static const int INIT_PROTO_VERSION = 209;
