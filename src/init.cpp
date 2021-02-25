@@ -34,6 +34,7 @@
 #endif
 
 #include <boost/algorithm/string/predicate.hpp>
+#include <boost/algorithm/string/replace.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/interprocess/sync/file_lock.hpp>
 #include <openssl/crypto.h>
