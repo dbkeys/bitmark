@@ -178,7 +178,8 @@ std::string GetWarnings(std::string strFor);
 /** Retrieve a transaction (from memory pool, or from disk, if possible) */
 bool GetTransaction(const uint256 &hash, CTransaction &tx, uint256 &hashBlock, bool fAllowSlow = false);
 /** Find the best known block, and make it the tip of the block chain */
-bool ActivateBestChain(CValidationState &state);
+// bool ActivateBestChain(CValidationState &state);
+bool ActivateBestChain(CValidationState &state, CBlock *pblock = NULL);
 bool onFork(const CBlockIndex* pindex);
 int64_t GetBlockValue(CBlockIndex* pindexPrev, int64_t nFees, bool noScale = false);
 unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast);
