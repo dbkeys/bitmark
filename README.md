@@ -3,7 +3,7 @@
 Project Bitmark is a multi faceted project which aims to provide:
 
 1. A ** stable cryptographic currency network** which balances the requirements of all parties involved.
-2. A **far reaching adoption initiative** under the guise of novel reputation+currency system called [Marking](https://github.com/project-bitmark/marking/wiki)
+2. A **far reaching adoption initiative** guided by the vision of a novel reputation+currency system called [Marking](https://github.com/project-bitmark/marking/wiki)
 
 This repository contains the Bitmark cryptograpic currency software, and a wiki which provides all details pertaining to the software, it's configuration and the rationale of all design decisions.
 
@@ -34,6 +34,9 @@ Bitmark aims to be a relatively stable, user focused crypto currency, which refi
 ## Getting Bitmark
 
 All Bitmark software releases are published through the github release process, you can download the [latest release](https://github.com/project-bitmark/bitmark/releases) from the releases tab above.
+
+## Initial Blockchain Download  (v0.9.7.4)
+This version addresses compatibility issues with the latest Ubuntu TLS/SSL libraries, and implementts the "Headers-First / Blocks-in-Parallel" initial blockchain download strategy, which results in faster initial download of the complete shared-ledger Bitmark blockchain.
 
 ## Eight Algortihm mPoW Hard Fork (v0.9.7)
 
