@@ -790,6 +790,8 @@ FILE* OpenDiskFile(const CDiskBlockPos &pos, const char *prefix, bool fReadOnly)
 
 FILE* OpenBlockFile(const CDiskBlockPos &pos, bool fReadOnly = false);
 
+FILE* OpenUndoFile(const CDiskBlockPos &pos, bool fReadOnly = false);
+
 bool CheckAuxPowProofOfWork(const CBlockHeader& block, const CChainParams& params);
 
 unsigned int GetAlgoWeight (const int algo);

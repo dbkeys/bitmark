@@ -591,6 +591,10 @@ FILE* OpenBlockFile(const CDiskBlockPos &pos, bool fReadOnly) {
     return OpenDiskFile(pos, "blk", fReadOnly);
 }
 
+FILE* OpenUndoFile(const CDiskBlockPos &pos, bool fReadOnly) {
+    return OpenDiskFile(pos, "rev", fReadOnly);
+}
+
 bool CheckAuxPowProofOfWork(const CBlockHeader& block, const CChainParams& params)
 {
   int algo = block.GetAlgo();
