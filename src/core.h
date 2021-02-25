@@ -977,9 +977,9 @@ public:
         bnTarget.SetCompact(nBits);
         if (bnTarget <= 0)
             return 0;
-	unsigned int algo_weight = GetAlgoWeight(this->GetAlgo());
-	CBigNum weight(algo_weight);
-	//LogPrintf("algo is %d and weight is %lu\n",nVersion & BLOCK_VERSION_ALGO,weight.getulong());
+        unsigned int algo_weight = GetAlgoWeight(this->GetAlgo());
+        CBigNum weight(algo_weight);
+        //LogPrintf("algo is %d and weight is %lu\n",nVersion & BLOCK_VERSION_ALGO,weight.getulong());
         return (CBigNum(1)<<256) / (bnTarget/weight+1);
     }
 
@@ -1402,6 +1402,7 @@ public:
 
     /** Find the last common block between this chain and a locator. */
     CBlockIndex *FindFork(const CBlockLocator &locator) const;
+    const CBlockIndex *FindForkByIndex(const CBlockIndex *pindex) const;
 };
 
 /** The currently-connected chain of blocks. */
