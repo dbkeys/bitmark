@@ -810,6 +810,9 @@ public:
     // pointer to the index of the predecessor of this block
     CBlockIndex* pprev;
 
+    // pointer to the index of some further predecessor of this block
+    CBlockIndex* pskip;
+
     // pointer to the AuxPoW header, if this block has one
     boost::shared_ptr<CAuxPow> pauxpow;
 
@@ -1052,6 +1055,35 @@ public:
 	}
       return ALGO_SCRYPT;
     }
+    // Check whether this block index entry is valid up to the passed validity level.
+    bool IsValid(enum BlockStatus nUpTo = BLOCK_VALID_TRANSACTIONS) const
+    {
+        assert(!(nUpTo & ~BLOCK_VALID_MASK)); // Only validity flags allowed.
+        if (nStatus & BLOCK_FAILED_MASK)
+            return false;
+        return ((nStatus & BLOCK_VALID_MASK) >= nUpTo);
+    }
+
+    // Raise the validity level of this block index entry.
+    // Returns true if the validity was changed.
+    bool RaiseValidity(enum BlockStatus nUpTo)
+    {
+        assert(!(nUpTo & ~BLOCK_VALID_MASK)); // Only validity flags allowed.
+        if (nStatus & BLOCK_FAILED_MASK)
+            return false;
+        if ((nStatus & BLOCK_VALID_MASK) < nUpTo) {
+            nStatus = (nStatus & ~BLOCK_VALID_MASK) | nUpTo;
+            return true;
+        }
+        return false;
+    }
+
+    // Build the skiplist pointer for this entry.
+    void BuildSkip();
+
+    // Efficiently find an ancestor of this block.
+    CBlockIndex* GetAncestor(int height);
+    const CBlockIndex* GetAncestor(int height) const;
 
 };
 
