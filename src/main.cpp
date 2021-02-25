@@ -2201,6 +2201,7 @@ void ThreadScriptCheck() {
     scriptcheckqueue.Thread();
 }
 
+static int64_t nTimeTotal = 0;
 bool ConnectBlock(CBlock& block, CValidationState& state, CBlockIndex* pindex, CCoinsViewCache& view, bool fJustCheck)
 {
   if (pindex->nHeight > 0) {
@@ -2621,7 +2622,7 @@ bool static ConnectTip(CValidationState &state, CBlockIndex *pindexNew, CBlock *
     int64_t nTime3;
     LogPrint("bench", "  - Load block from disk: %.2fms [%.2fs]\n", (nTime2 - nTime1) * 0.001, nTimeReadFromDisk * 0.000001);
     {
-        CCoinsViewCache view(pcoinsTip);
+        CCoinsViewCache view(*pcoinsTip, true);
         CInv inv(MSG_BLOCK, pindexNew->GetBlockHash());
         if (!ConnectBlock(*pblock, state, pindexNew, view)) {
             if (state.IsInvalid())
@@ -2643,17 +2644,20 @@ bool static ConnectTip(CValidationState &state, CBlockIndex *pindexNew, CBlock *
     // Remove conflicting transactions from the mempool.
     list<CTransaction> txConflicted;
     mempool.removeForBlock(pblock->vtx, pindexNew->nHeight, txConflicted);
+
     mempool.check(pcoinsTip);
     // Update chainActive & related variables.
     UpdateTip(pindexNew);
     // Tell wallet about transactions that went from mempool
     // to conflicted:
+
+
     BOOST_FOREACH(const CTransaction &tx, txConflicted) {
-        SyncWithWallets(tx, NULL);
+        SyncWithWallets(tx.GetHash(), tx, NULL);
     }
     // ... and about transactions that got confirmed:
-    BOOST_FOREACH(const CTransaction &tx, pblock->vtx) {
-        SyncWithWallets(tx, pblock);
+    BOOST_FOREACH(const CTransaction &tx, block.vtx) {
+        SyncWithWallets(tx.GetHash(), tx, &block);
     }
     // Update best block in wallet (so we can detect restored wallets)
     // Emit this signal after the SyncWithWallets signals as the wallet relies on that everything up to this point has been synced
@@ -2713,7 +2717,7 @@ static CBlockIndex* FindMostWorkChain() {
             pindexTest = pindexTest->pprev;
         }
         if (!fInvalidAncestor)
-            return pindexNew
+            return pindexNew;
     } while(true);
 
     // // Check whether it's actually an improvement.
