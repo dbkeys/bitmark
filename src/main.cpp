@@ -219,6 +219,16 @@ struct CNodeState {
     std::string name;
     // List of asynchronously-determined block rejections to notify this peer about.
     std::vector<CBlockReject> rejects;
+    // The best known block we know this peer has announced.
+    CBlockIndex *pindexBestKnownBlock;
+    // The hash of the last unknown block this peer has announced.
+    uint256 hashLastUnknownBlock;
+    // The last full block we both have.
+    CBlockIndex *pindexLastCommonBlock;
+    // Whether we've started headers synchronization with this peer.
+    bool fSyncStarted;
+    // Since when we're stalling block download progress (in microseconds), or 0.
+    int64_t nStallingSince;
     list<QueuedBlock> vBlocksInFlight;
     int nBlocksInFlight;
     // list<uint256> vBlocksToDownload;
@@ -230,6 +240,8 @@ struct CNodeState {
         nMisbehavior = 0;
         fShouldBan = false;
         // nBlocksToDownload = 0;
+        pindexBestKnownBlock = NULL;
+        hashLastUnknownBlock = uint256(0);
         pindexLastCommonBlock = NULL;
         fSyncStarted = false;
         nStallingSince = 0;
@@ -333,6 +345,39 @@ void MarkBlockAsInFlight(NodeId nodeid, const uint256& hash, CBlockIndex *pindex
     list<QueuedBlock>::iterator it = state->vBlocksInFlight.insert(state->vBlocksInFlight.end(), newentry);
     state->nBlocksInFlight++;
     mapBlocksInFlight[hash] = std::make_pair(nodeid, it);
+}
+
+/** Check whether the last unknown block a peer advertized is not yet known. */
+void ProcessBlockAvailability(NodeId nodeid) {
+    CNodeState *state = State(nodeid);
+    assert(state != NULL);
+
+    if (state->hashLastUnknownBlock != 0) {
+        BlockMap::iterator itOld = mapBlockIndex.find(state->hashLastUnknownBlock);
+        if (itOld != mapBlockIndex.end() && itOld->second->nChainWork > 0) {
+            if (state->pindexBestKnownBlock == NULL || itOld->second->nChainWork >= state->pindexBestKnownBlock->nChainWork)
+                state->pindexBestKnownBlock = itOld->second;
+            state->hashLastUnknownBlock = uint256(0);
+        }
+    }
+}
+
+/** Update tracking information about which blocks a peer is assumed to have. */
+void UpdateBlockAvailability(NodeId nodeid, const uint256 &hash) {
+    CNodeState *state = State(nodeid);
+    assert(state != NULL);
+
+    ProcessBlockAvailability(nodeid);
+
+    BlockMap::iterator it = mapBlockIndex.find(hash);
+    if (it != mapBlockIndex.end() && it->second->nChainWork > 0) {
+        // An actually better block was announced.
+        if (state->pindexBestKnownBlock == NULL || it->second->nChainWork >= state->pindexBestKnownBlock->nChainWork)
+            state->pindexBestKnownBlock = it->second;
+    } else {
+        // An unknown block was announced; just assume that the latest one is the best one.
+        state->hashLastUnknownBlock = hash;
+    }
 }
 
 /** Find the last common ancestor two blocks have.
@@ -3210,7 +3255,7 @@ bool AcceptBlockHeader(const CBlockHeader& block, CValidationState& state, CBloc
                              REJECT_CHECKPOINT, "checkpoint mismatch");
 
         // Don't accept any forks from the main chain prior to last checkpoint
-        CBlockIndex* pcheckpoint = Checkpoints::GetLastCheckpoint();
+        CBlockIndex* pcheckpoint = Checkpoints::GetLastCheckpoint(mapBlockIndex);
         if (pcheckpoint && nHeight < pcheckpoint->nHeight)
             return state.DoS(100, error("%s : forked chain older than last checkpoint (height %d)", __func__, nHeight));
 
@@ -3263,28 +3308,28 @@ bool AcceptBlock(CBlock& block, CValidationState& state, CBlockIndex** ppindex, 
                              REJECT_INVALID, "bad-txns-nonfinal");
 
     // Enforce block.nVersion=2 rule that the coinbase starts with serialized block height
-    if (block.nVersion >= 2)
+    if (block.nVersion >= 2 &&
+        CBlockIndex::IsSuperMajority(2, pindex->pprev, Params().EnforceBlockUpgradeMajority()))
     {
         CScript expect = CScript() << nHeight;
         if (block.vtx[0].vin[0].scriptSig.size() < expect.size() ||
             !std::equal(expect.begin(), expect.end(), block.vtx[0].vin[0].scriptSig.begin())) {
             pindex->nStatus |= BLOCK_FAILED_VALID;
-            return state.DoS(100, error("AcceptBlock() : block height mismatch in coinbase, nHeight=%d",nHeight),
-                             REJECT_INVALID, "bad-cb-height");
-    }
+            return state.DoS(100, error("AcceptBlock() : block height mismatch in coinbase, nHeight=%d",nHeight), REJECT_INVALID, "bad-cb-height");
+        }
     }
 
     // Reject block.nVersion=2 blocks when 95% of the network has upgraded:
 
     if (block.nVersion < 3 &&
-    CBlockIndex::IsSuperMajority(3, pindexPrev, 950, 1000))
+    CBlockIndex::IsSuperMajority(3, pindex->pprev, 950, 1000))
     {
         return state.Invalid(error("AcceptBlock() : rejected nVersion=2 block"),
         REJECT_OBSOLETE, "bad-version");
     }
 
     if (block.IsAuxpow() || block.GetAlgo() != ALGO_SCRYPT) {
-        if (pindexPrev->nHeight < nForkHeight-1 || !CBlockIndex::IsSuperMajority(4,pindexPrev,75,100)) {
+        if (pindex->pprev->nHeight < nForkHeight-1 || !CBlockIndex::IsSuperMajority(4,pindex->pprev,75,100)) {
             pindex->nStatus |= BLOCK_FAILED_VALID;
             return state.DoS(100,error("AcceptBlock() : new block format requires fork activation"),REJECT_INVALID,"bad-version-fork");
         }
@@ -5362,69 +5407,6 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
     return true;
 }
 
-bool CBlockUndo::WriteToDisk(CDiskBlockPos &pos, const uint256 &hashBlock)
-{
-    // Open history file to append
-    CAutoFile fileout(OpenUndoFile(pos), SER_DISK, CLIENT_VERSION);
-    if (!fileout)
-        return error("CBlockUndo::WriteToDisk : OpenUndoFile failed");
-
-    // Write index header
-    unsigned int nSize = fileout.GetSerializeSize(*this);
-    fileout << FLATDATA(Params().MessageStart()) << nSize;
-
-    // Write undo data
-    long fileOutPos = ftell(fileout);
-    if (fileOutPos < 0)
-        return error("CBlockUndo::WriteToDisk : ftell failed");
-    pos.nPos = (unsigned int)fileOutPos;
-    fileout << *this;
-
-    // calculate & write checksum
-    CHashWriter hasher(SER_GETHASH, PROTOCOL_VERSION);
-    hasher << hashBlock;
-    hasher << *this;
-    fileout << hasher.GetHash();
-
-    // Flush stdio buffers and commit to disk before returning
-    fflush(fileout);
-    if (!IsInitialBlockDownload())
-        FileCommit(fileout);
-
-    return true;
-}
-
-bool CBlockUndo::ReadFromDisk(const CDiskBlockPos &pos, const uint256 &hashBlock)
-{
-    // Open history file to read
-    CAutoFile filein(OpenUndoFile(pos, true), SER_DISK, CLIENT_VERSION);
-    if (!filein)
-        return error("CBlockUndo::ReadFromDisk : OpenBlockFile failed");
-
-    // Read block
-    uint256 hashChecksum;
-    try {
-        filein >> *this;
-        filein >> hashChecksum;
-    }
-    catch (std::exception &e) {
-        return error("%s : Deserialize or I/O error - %s", __func__, e.what());
-    }
-
-    // Verify checksum
-    CHashWriter hasher(SER_GETHASH, PROTOCOL_VERSION);
-    hasher << hashBlock;
-    hasher << *this;
-    if (hashChecksum != hasher.GetHash())
-        return error("CBlockUndo::ReadFromDisk : Checksum mismatch");
-
-    return true;
-}
-
- std::string CBlockFileInfo::ToString() const {
-     return strprintf("CBlockFileInfo(blocks=%u, size=%u, heights=%u...%u, time=%s...%s)", nBlocks, nSize, nHeightFirst, nHeightLast, DateTimeStrFormat("%Y-%m-%d", nTimeFirst), DateTimeStrFormat("%Y-%m-%d", nTimeLast));
- }
-
 class CMainCleanup
 {
 public:
@@ -5435,7 +5417,7 @@ public:
         for (; it1 != mapBlockIndex.end(); it1++)
             delete (*it1).second;
         mapBlockIndex.clear();
-        
+
         // orphan transactions
         mapOrphanTransactions.clear();
         mapOrphanTransactionsByPrev.clear();

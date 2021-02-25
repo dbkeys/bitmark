@@ -243,21 +243,30 @@ uint64_t CTxOutCompressor::DecompressAmount(uint64_t x)
     return n;
 }
 
-uint256 CBlock::BuildMerkleTree() const
+uint256 CBlock::BuildMerkleTree(bool* fMutated) const
 {
     vMerkleTree.clear();
+    vMerkleTree.reserve(vtx.size() * 2 + 16); // Safe upper bound for the number of total nodes.
     BOOST_FOREACH(const CTransaction& tx, vtx)
         vMerkleTree.push_back(tx.GetHash());
     int j = 0;
+    bool mutated = false;
     for (int nSize = vtx.size(); nSize > 1; nSize = (nSize + 1) / 2)
     {
         for (int i = 0; i < nSize; i += 2)
         {
             int i2 = std::min(i+1, nSize-1);
+            if (i2 == i + 1 && i2 + 1 == nSize && vMerkleTree[j+i] == vMerkleTree[j+i2]) {
+                // Two identical hashes at the end of the list at a particular level.
+                mutated = true;
+            }
             vMerkleTree.push_back(Hash(BEGIN(vMerkleTree[j+i]),  END(vMerkleTree[j+i]),
                                        BEGIN(vMerkleTree[j+i2]), END(vMerkleTree[j+i2])));
         }
         j += nSize;
+    }
+    if (fMutated) {
+        *fMutated = mutated;
     }
     return (vMerkleTree.empty() ? 0 : vMerkleTree.back());
 }

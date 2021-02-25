@@ -753,8 +753,8 @@ public:
         block.nNonce         = nNonce;
         return block;
     }
-
-    uint256 BuildMerkleTree() const;
+    
+    uint256 BuildMerkleTree(bool* mutated = NULL) const;
 
     const uint256 &GetTxHash(unsigned int nIndex) const {
         assert(vMerkleTree.size() > 0); // BuildMerkleTree must have been called first
