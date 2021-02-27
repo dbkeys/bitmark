@@ -19,6 +19,9 @@
 #include "json/json_spirit_utils.h"
 #include "json/json_spirit_writer_template.h"
 
+#include <boost/asio.hpp>
+#include <boost/asio/ssl.hpp>
+
 class CBlockIndex;
 
 /* Start RPC threads */
