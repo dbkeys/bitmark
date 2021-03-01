@@ -36,6 +36,8 @@ Bitmark aims to be a relatively stable, user focused crypto currency, which refi
 All Bitmark software releases are published through the github release process, you can download the [latest release](https://github.com/project-bitmark/bitmark/releases) from the releases tab above.
 
 ## Update to compile with newest TLS / SSL Libraries in Ubuntu 20
+March 1, 2021   This branches off Master's tag v0.9.7.2 to develop use of the latest TLS/SSL libraries in Ubuntu 20
+The goal is stable release v0.9.7.4, compatible with all previous version the 0.9.7.x series, for the latest major OS releases.
 
 ## Eight Algortihm mPoW Hard Fork (v0.9.7)
 
