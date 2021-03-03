@@ -124,3 +124,5 @@ qa/pull-tester/test.*/*
 
 libbitcoinconsensus.pc
 *~
+
+log
