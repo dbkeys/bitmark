@@ -37,6 +37,10 @@ All Bitmark software releases are published through the github release process, 
 
 ## Initial Blockchain Download  (v0.9.7.4)
 This version addresses compatibility issues with the latest Ubuntu TLS/SSL libraries, and implementts the "Headers-First / Blocks-in-Parallel" initial blockchain download strategy, which results in faster initial download of the complete shared-ledger Bitmark blockchain.
+=======
+## Update to compile with newest TLS / SSL Libraries in Ubuntu 20
+March 1, 2021   This development branches off Master's tag v0.9.7.2 to use of the latest TLS/SSL libraries in Ubuntu 18 and 20.
+The goal is stable release v0.9.7.4, compatible with all previous version the 0.9.7.x series, for the latest major OS releases.
 
 ## Eight Algortihm mPoW Hard Fork (v0.9.7)
 

@@ -20,7 +20,7 @@
 
 // Copyright year (2009-this)
 
-#define COPYRIGHT_YEAR 2018
+#define COPYRIGHT_YEAR 2021
 
 #endif //HAVE_CONFIG_H
 

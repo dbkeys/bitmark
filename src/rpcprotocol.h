@@ -20,6 +20,10 @@
 #include "json/json_spirit_utils.h"
 #include "json/json_spirit_writer_template.h"
 
+// < H =======
+#include <boost/asio.hpp>
+#include <boost/asio/ssl.hpp>
+
 // Boost Support for 1.70+
 #if BOOST_VERSION >= 107000
     #define GetIOService(s) ((boost::asio::io_context&)(s).get_executor().context())

@@ -67,6 +67,13 @@ bool AppInit(int argc, char* argv[])
         // If Qt is used, parameters/bitmark.conf are parsed in qt/bitmark.cpp's main()
         ParseParameters(argc, argv);
 
+	// CLI version info
+	if (IsArgSet("-version"))
+	{
+	    strUsage += FormatParagraph(LicenseInfo());
+	    return true;
+	} 
+
         if (!boost::filesystem::is_directory(GetDataDir(false)))
         {
             fprintf(stderr, "Error: Specified data directory \"%s\" does not exist.\n", mapArgs["-datadir"].c_str());
@@ -103,6 +110,7 @@ bool AppInit(int argc, char* argv[])
             return false;
         }
 
+<<<<<<< HEAD
   	if (mapArgs.count("-v") || mapArgs.count("--version"))
           { 
             // First part of help message is specific to bitmarkd / RPC client
@@ -110,6 +118,16 @@ bool AppInit(int argc, char* argv[])
             fprintf(stdout, "%s", strUsage.c_str());
             return false;
           } 
+=======
+	if (mapArgs.count("-v") || mapArgs.count("--version"))
+	  {
+            // First part of help message is specific to bitmarkd / RPC client
+            std::string strUsage = _("Bitmark Core Daemon") + " " + _("version") + " " + FormatFullVersion() + "\n";
+	    fprintf(stdout, "%s", strUsage.c_str());
+	    return false;
+	  }
+	      
+>>>>>>> 8c86fc1cbf5dccf828cc0c330666c7d385588234
 
         // Command-line RPC
         bool fCommandLine = false;
