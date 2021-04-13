@@ -1059,6 +1059,13 @@ public:
       return ALGO_SCRYPT;
     }
 
+    // Build the skiplist pointer for this entry.
+    void BuildSkip();
+
+    // Efficiently find an ancestor of this block.
+    CBlockIndex* GetAncestor(int height);
+    const CBlockIndex* GetAncestor(int height) const;
+
 };
 
 /** Used to marshal pointers into hashes for db storage. */
