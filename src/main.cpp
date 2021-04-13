@@ -18,6 +18,7 @@
 #include "ui_interface.h"
 #include "util.h"
 #include "pow.h"
+#include "util.h"
 
 #include <sstream>
 #include <inttypes.h>
@@ -40,6 +41,7 @@ using namespace boost;
 CTxMemPool mempool;
 
 map<uint256, CBlockIndex*> mapBlockIndex;
+CBlockIndex *pindexBestHeader = NULL;
 CChain chainMostWork;
 CCoinsViewCache *pcoinsTip = NULL;
 int64_t nTimeBestReceived = 0;
@@ -104,6 +106,11 @@ namespace {
     CBlockIndex *pindexBestInvalid;
     // may contain all CBlockIndex*'s that have validness >=BLOCK_VALID_TRANSACTIONS, and must contain those who aren't failed
     set<CBlockIndex*, CBlockIndexWorkComparator> setBlockIndexValid;
+
+    // Number of nodes with fSyncStarted.
+    int nSyncStarted = 0;
+    // All pairs A->B, where A (or one if its ancestors) misses transactions, but B has transactions.
+    multimap<CBlockIndex*, CBlockIndex*> mapBlocksUnlinked;
 
     CCriticalSection cs_LastBlockFile;
     CBlockFileInfo infoLastBlockFile;
@@ -2796,6 +2803,51 @@ bool FindUndoPos(CValidationState &state, int nFile, CDiskBlockPos &pos, unsigne
 }
 
 
+bool CheckBlockHeader(const CBlockHeader& block, CValidationState& state, bool fCheckPOW)
+{
+    // Check proof of work matches claimed amount
+    if(fCheckPOW && block.IsAuxpow()) {
+      if (!CheckAuxPowProofOfWork(block, Params())) {
+    return state.DoS(50, error("CheckBlock() : auxpow proof of work failed"),
+             REJECT_INVALID, "high-hash");
+      }
+    }
+    else {
+          if (fCheckPOW && block.GetAlgo() == ALGO_EQUIHASH && !CheckEquihashSolution(&block, Params())) {
+        return state.DoS(50, error("CheckBlock() : Invalid Equihash Solution"),
+                 REJECT_INVALID, "bad-equihash-solution");      
+      }
+
+      //LogPrintf("check proof of work of block with algo %d\n",block.GetAlgo());
+      if (fCheckPOW && !CheckProofOfWork(block.GetPoWHash(),block.nBits,block.GetAlgo())) {
+        return state.DoS(50, error("CheckBlock() : proof of work failed"),
+                 REJECT_INVALID, "high-hash");
+      }
+    }
+
+    // Check timestamp
+    int64_t nNow = GetTime();
+    //if (fDebug) LogPrintf("block_delta = %ld\n",block.GetBlockTime()-nNow); // for generating statistics
+    if (block.GetBlockTime() > nNow + 12 * 60) {
+        if (block.GetBlockTime() <= GetAdjustedTime() + 2 * 60 * 60) {
+            std::string warning = std::string("'Warning: Block timestamp too far in the future. Please check your clock and be careful of network forks.");
+            CAlert::Notify(warning, true);
+            fBlockTooFarInFuture = true;
+            LogPrintf("Warning: Block timestamp too far in the future. Please check your clock and be careful of network forks.");
+        }
+        return state.Invalid(error("CheckBlock() : block timestamp too far in the future"), REJECT_INVALID, "time-too-new");
+    }
+    else {
+        nSinceBlockTooFarInFuture++;
+        if (nSinceBlockTooFarInFuture > 720) {
+            fBlockTooFarInFuture = false;
+            nSinceBlockTooFarInFuture = 0;
+        }
+    }
+
+    return true;
+}
+
 bool CheckBlock(const CBlock& block, CValidationState& state, bool fCheckPOW, bool fCheckMerkleRoot)
 {
     // These are checks that are independent of context
@@ -2902,6 +2954,98 @@ bool CheckBlock(const CBlock& block, CValidationState& state, bool fCheckPOW, bo
     if (fCheckMerkleRoot && block.hashMerkleRoot != block.vMerkleTree.back())
         return state.DoS(100, error("CheckBlock() : hashMerkleRoot mismatch"),
                          REJECT_INVALID, "bad-txnmrklroot", true);
+
+    return true;
+}
+
+bool AcceptBlockHeader(const CBlockHeader& block, CValidationState& state, CBlockIndex** ppindex)
+{
+    AssertLockHeld(cs_main);
+    // Check for duplicate
+    uint256 hash = block.GetHash();
+    map<uint256, CBlockIndex*>::iterator miSelf = mapBlockIndex.find(hash);
+    CBlockIndex *pindex = NULL;
+    if (miSelf != mapBlockIndex.end()) {
+        // Block header is already known.
+        pindex = (*miSelf).second;
+        if (ppindex)
+            *ppindex = pindex;
+        if (pindex->nStatus & BLOCK_FAILED_MASK)
+            return state.Invalid(error("%s : block is marked invalid", __func__), 0, "duplicate");
+        return true;
+    }
+
+    // Get prev block index
+    CBlockIndex* pindexPrev = NULL;
+    int nHeight = 0;
+    if (hash != Params().HashGenesisBlock()) {
+        map<uint256, CBlockIndex*>::iterator mi = mapBlockIndex.find(block.hashPrevBlock);
+        if (mi == mapBlockIndex.end())
+            return state.DoS(10, error("%s : prev block not found", __func__), 0, "bad-prevblk");
+        pindexPrev = (*mi).second;
+        nHeight = pindexPrev->nHeight+1;
+
+        // Check proof of work
+        // if ((!Params().SkipProofOfWorkCheck()) &&
+        //    (block.nBits != GetNextWorkRequired(pindexPrev, &block)))
+        //     return state.DoS(100, error("%s : incorrect proof of work", __func__),
+        //                      REJECT_INVALID, "bad-diffbits");
+
+        int block_algo = GetAlgo(block.nVersion);
+        unsigned int next_work_required = GetNextWorkRequired(pindexPrev, block_algo);
+        if (block.nBits != next_work_required) {
+            LogPrintf("nbits = %d, required = %d\n",block.nBits,next_work_required);
+            return state.DoS(100, error("%s : incorrect proof of work", __func__), REJECT_INVALID, "bad-diffbits");
+        }
+
+        // Check timestamp against prev
+        if (block.GetBlockTime() <= pindexPrev->GetMedianTimePast())
+            return state.Invalid(error("%s : block's timestamp is too early", __func__),
+                                 REJECT_INVALID, "time-too-old");
+
+        // Check that the block chain matches the known block chain up to a checkpoint
+        if (!Checkpoints::CheckBlock(nHeight, hash))
+            return state.DoS(100, error("%s : rejected by checkpoint lock-in at %d", __func__, nHeight),
+                             REJECT_CHECKPOINT, "checkpoint mismatch");
+
+        // Don't accept any forks from the main chain prior to last checkpoint
+        CBlockIndex* pcheckpoint = Checkpoints::GetLastCheckpoint(mapBlockIndex);
+        if (pcheckpoint && nHeight < pcheckpoint->nHeight)
+            return state.DoS(100, error("%s : forked chain older than last checkpoint (height %d)", __func__, nHeight));
+
+        // Reject block.nVersion=1 blocks when 95% (75% on testnet) of the network has upgraded:
+        if (block.nVersion < 2)
+        {
+            return state.Invalid(error("%s : rejected nVersion=1 block", __func__), REJECT_OBSOLETE, "bad-version");
+        }
+
+        // Enforce block.nVersion=2 rule that the coinbase starts with serialized block height
+        // if (block.nVersion >= 2)
+        // {
+        //     CScript expect = CScript() << nHeight;
+        //     if (block.vtx[0].vin[0].scriptSig.size() < expect.size() ||
+        //         !std::equal(expect.begin(), expect.end(), block.vtx[0].vin[0].scriptSig.begin()))
+        //       return state.DoS(100, error("%s : block height mismatch in coinbase, nHeight=%d", __func__, nHeight),
+        //                          REJECT_INVALID, "bad-cb-height");
+        // }
+
+        if (block.nVersion < 3 &&
+        CBlockIndex::IsSuperMajority(3, pindexPrev, 950, 1000))
+        {
+            return state.Invalid(error("%s : rejected nVersion=2 block", __func__),
+            REJECT_OBSOLETE, "bad-version");
+        }
+
+        if (block.IsAuxpow() || block.GetAlgo() != ALGO_SCRYPT) {
+            if (pindexPrev->nHeight < nForkHeight-1 || !CBlockIndex::IsSuperMajority(4,pindexPrev,75,100)) {
+            return state.DoS(100,error("%s : new block format requires fork activation", __func__),REJECT_INVALID,"bad-version-fork");
+            }
+        }
+
+    }
+
+    if (ppindex)
+        *ppindex = pindex;
 
     return true;
 }
@@ -3124,6 +3268,55 @@ bool ProcessBlock(CValidationState &state, CNode* pfrom, CBlock* pblock, CDiskBl
     }
     LogPrintf("ProcessBlock: ACCEPTED\n");
     return true;
+}
+
+/** Turn the lowest '1' bit in the binary representation of a number into a '0'. */
+int static inline InvertLowestOne(int n) { return n & (n - 1); }
+
+/** Compute what height to jump back to with the CBlockIndex::pskip pointer. */
+int static inline GetSkipHeight(int height) {
+    if (height < 2)
+        return 0;
+
+    // Determine which height to jump back to. Any number strictly lower than height is acceptable,
+    // but the following expression seems to perform well in simulations (max 110 steps to go back
+    // up to 2**18 blocks).
+    return (height & 1) ? InvertLowestOne(InvertLowestOne(height - 1)) + 1 : InvertLowestOne(height);
+}
+
+CBlockIndex* CBlockIndex::GetAncestor(int height)
+{
+    if (height > nHeight || height < 0)
+        return NULL;
+
+    CBlockIndex* pindexWalk = this;
+    int heightWalk = nHeight;
+    while (heightWalk > height) {
+        int heightSkip = GetSkipHeight(heightWalk);
+        int heightSkipPrev = GetSkipHeight(heightWalk - 1);
+        if (heightSkip == height ||
+            (heightSkip > height && !(heightSkipPrev < heightSkip - 2 &&
+                                      heightSkipPrev >= height))) {
+            // Only follow pskip if pprev->pskip isn't better than pskip->pprev.
+            pindexWalk = pindexWalk->pskip;
+            heightWalk = heightSkip;
+        } else {
+            pindexWalk = pindexWalk->pprev;
+            heightWalk--;
+        }
+    }
+    return pindexWalk;
+}
+
+const CBlockIndex* CBlockIndex::GetAncestor(int height) const
+{
+    return const_cast<CBlockIndex*>(this)->GetAncestor(height);
+}
+
+void CBlockIndex::BuildSkip()
+{
+    if (pprev)
+        pskip = pprev->GetAncestor(GetSkipHeight(nHeight));
 }
 
 CMerkleBlock::CMerkleBlock(const CBlock& block, CBloomFilter& filter)
@@ -4305,6 +4498,54 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
                                state.GetRejectReason(), inv.hash);
             if (nDoS > 0)
                 Misbehaving(pfrom->GetId(), nDoS);
+        }
+    }
+
+    else if (strCommand == "headers" && !fImporting && !fReindex) // Ignore headers received while importing
+    {
+        std::vector<CBlockHeader> headers;
+
+        // Bypass the normal CBlock deserialization, as we don't want to risk deserializing 2000 full blocks.
+        unsigned int nCount = ReadCompactSize(vRecv);
+        if (nCount > MAX_HEADERS_RESULTS) {
+            Misbehaving(pfrom->GetId(), 20);
+            return error("headers message size = %u", nCount);
+        }
+        headers.resize(nCount);
+        for (unsigned int n = 0; n < nCount; n++) {
+            vRecv >> headers[n];
+            ReadCompactSize(vRecv); // ignore tx count; assume it is 0.
+        }
+
+        LOCK(cs_main);
+
+        if (nCount == 0) {
+            // Nothing interesting. Stop asking this peers for more headers.
+            return true;
+        }
+
+        CBlockIndex *pindexLast = NULL;
+        BOOST_FOREACH(const CBlockHeader& header, headers) {
+            CValidationState state;            
+            if (pindexLast != NULL && header.hashPrevBlock != pindexLast->GetBlockHash()) {
+                // Misbehaving(pfrom->GetId(), 20);
+                return error("non-continuous headers sequence");
+            }
+            // if (!AcceptBlockHeader(header, state, &pindexLast)) {
+            //     int nDoS;
+            //     if (state.IsInvalid(nDoS)) {
+            //         if (nDoS > 0)
+            //             Misbehaving(pfrom->GetId(), nDoS);
+            //         return error("invalid header received");
+            //     }
+            // }
+        }
+
+        if (nCount == MAX_HEADERS_RESULTS && pindexLast) {
+            // Headers message had its maximum size; the peer may have more headers.
+            // TODO: optimize: if pindexLast is an ancestor of chainActive.Tip or pindexBestHeader, continue
+            // from there instead.
+            LogPrint("net", "more getheaders (%d) to end to peer=%d (startheight:%d)\n", pindexLast->nHeight, pfrom->id, pfrom->nStartingHeight);
         }
     }
 

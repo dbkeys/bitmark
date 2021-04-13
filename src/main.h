@@ -64,6 +64,9 @@ static const int DEFAULT_SCRIPTCHECK_THREADS = 0;
 static const int MAX_BLOCKS_IN_TRANSIT_PER_PEER = 128;
 /** Timeout in seconds before considering a block download peer unresponsive. */
 static const unsigned int BLOCK_DOWNLOAD_TIMEOUT = 60;
+/** Number of headers sent in one getheaders result. We rely on the assumption that if a peer sends
+ *  less than this number, we reached their tip. Changing this value is a protocol upgrade. */
+static const unsigned int MAX_HEADERS_RESULTS = 2000;
 
 #ifdef USE_UPNP
 static const int fHaveUPnP = true;
@@ -494,6 +497,7 @@ bool CheckBlock(const CBlock& block, CValidationState& state, bool fCheckPOW = t
 
 // Store block on disk
 // if dbp is provided, the file is known to already reside on disk
+bool AcceptBlockHeader(const CBlockHeader& block, CValidationState& state, CBlockIndex **ppindex= NULL);
 bool AcceptBlock(CBlock& block, CValidationState& state, CDiskBlockPos* dbp = NULL);
 
 class CBlockFileInfo
