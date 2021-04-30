@@ -34,6 +34,8 @@ Bitmark aims to be a relatively stable, user focused crypto currency, which refi
 ## Getting Bitmark
 
 All Bitmark software releases are published through the github release process, you can download the [latest release](https://github.com/project-bitmark/bitmark/releases) from the releases tab above.
+## Console branch
+This experimental branch aims to develop an ncurses based text-mode conosle to monitor all phases of the node's functioning.
 
 ## Eight Algortihm mPoW Hard Fork (v0.9.7)
 
